@@ -637,13 +637,6 @@ if (quantity > item.in_stock) {
   toast.error(`Quantidade indisponível. Estoque atual: ${item.in_stock}`);
   return;
 }
-
-// Email domain validation
-const emailDomain = email.split('@')[1];
-if (emailDomain !== 'manateeladiescleaning.com') {
-  toast.error('Apenas emails do domínio @manateeladiescleaning.com...');
-  return;
-}
 ```
 
 ---

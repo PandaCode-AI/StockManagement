@@ -38,13 +38,6 @@ export default function Login() {
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Validate email domain
-    const emailDomain = signupEmail.split('@')[1];
-    if (emailDomain !== 'manateeladiescleaning.com') {
-      toast.error('Apenas emails do domínio @manateeladiescleaning.com podem se cadastrar');
-      return;
-    }
-
     setLoading(true);
 
     try {

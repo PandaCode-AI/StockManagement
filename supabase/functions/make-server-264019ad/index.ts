@@ -71,13 +71,6 @@ app.post("/make-server-264019ad/auth/signup", async (c) => {
 
     console.log('📝 Creating user:', email);
 
-    // Validate email domain
-    const emailDomain = email.split('@')[1];
-    if (emailDomain !== 'manateeladiescleaning.com') {
-      console.log('❌ Invalid email domain:', emailDomain);
-      return c.json({ error: 'Apenas emails do domínio @manateeladiescleaning.com podem se cadastrar' }, 403);
-    }
-
     // Create user with Supabase Auth
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email,
