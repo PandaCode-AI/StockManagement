@@ -130,4 +130,8 @@ export const router = createBrowserRouter([
       },
     ],
   },
-]);
+], {
+  // Matches vite.config.ts `base` so routing works under GitHub Pages'
+  // https://<user>.github.io/StockManagement/ subpath.
+  basename: "/StockManagement/",
+});

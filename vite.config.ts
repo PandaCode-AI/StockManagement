@@ -17,6 +17,9 @@ function figmaAssetResolver() {
 }
 
 export default defineConfig({
+  // GitHub Pages serves this project at https://<user>.github.io/StockManagement/,
+  // so all built asset URLs need this prefix.
+  base: '/StockManagement/',
   plugins: [
     figmaAssetResolver(),
     // The React and Tailwind plugins are both required for Make, even if
