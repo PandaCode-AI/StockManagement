@@ -13,6 +13,7 @@ import GerenciarUsuarios from "./pages/GerenciarUsuarios";
 import GerenciarCleaners from "./pages/GerenciarCleaners";
 import Monitoramento from "./pages/Monitoramento";
 import Login from "./pages/Login";
+import AcceptInvite from "./pages/AcceptInvite";
 import JobsXml from "./pages/JobsXml";
 
 // Protected route wrapper
@@ -108,6 +109,10 @@ export const router = createBrowserRouter([
   {
     path: "/login",
     Component: Login,
+  },
+  {
+    path: "/accept-invite",
+    Component: AcceptInvite,
   },
   {
     path: "/jobs.xml",

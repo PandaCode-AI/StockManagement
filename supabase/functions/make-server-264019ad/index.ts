@@ -1202,4 +1202,74 @@ app.delete("/make-server-264019ad/profiles/:id", requireRole('Admin', 'Owner', '
   }
 });
 
+// ==================== INVITE ROUTES ====================
+
+// Invite a Supervisora by email. Uses Supabase Auth's built-in invite flow:
+// creates the auth user (unconfirmed) and sends the "Invite user" email
+// with a link back to redirectTo. The profile row is created immediately
+// so the org sees the invite right away (Supervisoras table), linked via
+// auth_user_id -- the invitee just needs to follow the email link and set
+// a password to be able to sign in.
+app.post("/make-server-264019ad/invites", requireRole('Admin', 'Owner'), async (c) => {
+  let createdUserId: string | undefined;
+  try {
+    const { org_id, employee_id: invitedByEmployeeId } = c.get('profile');
+    const { email, name, redirectTo } = await c.req.json();
+
+    if (!email || !email.trim()) {
+      return c.json({ error: 'Email é obrigatório' }, 400);
+    }
+    if (!name || !name.trim()) {
+      return c.json({ error: 'Nome é obrigatório' }, 400);
+    }
+    if (!redirectTo) {
+      return c.json({ error: 'redirectTo é obrigatório' }, 400);
+    }
+
+    console.log('📧 Convidando supervisora:', email);
+
+    const { data: inviteData, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(
+      email.trim(),
+      {
+        data: { name: name.trim(), org_id, role: 'Supervisora' },
+        redirectTo,
+      }
+    );
+
+    if (inviteError) {
+      console.error('❌ Invite error:', inviteError);
+      if (inviteError.message.includes('already been registered') || (inviteError as any).status === 422) {
+        return c.json({ error: 'Este email já está cadastrado no sistema' }, 400);
+      }
+      return c.json({ error: inviteError.message }, 400);
+    }
+    createdUserId = inviteData.user.id;
+
+    const { data: profile, error: profileError } = await supabaseAdmin
+      .from('profile')
+      .insert({
+        full_name: name.trim(),
+        role: 'Supervisora',
+        org_id,
+        auth_user_id: createdUserId,
+        is_active: true,
+      })
+      .select()
+      .single();
+
+    if (profileError) {
+      console.error('❌ Profile error:', profileError);
+      await supabaseAdmin.auth.admin.deleteUser(createdUserId);
+      return c.json({ error: profileError.message }, 400);
+    }
+
+    console.log('✅ Supervisora invited:', profile.employee_id, 'by employee', invitedByEmployeeId);
+    return c.json({ success: true, profile });
+  } catch (error) {
+    console.error('❌ Exception inviting supervisor:', error);
+    if (createdUserId) await supabaseAdmin.auth.admin.deleteUser(createdUserId).catch(() => {});
+    return c.json({ error: 'Failed to invite supervisor' }, 500);
+  }
+});
+
 Deno.serve(app.fetch);

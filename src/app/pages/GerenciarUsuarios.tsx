@@ -3,15 +3,19 @@ import { useNavigate } from 'react-router';
 import { useInventory } from '../context/InventoryContext';
 import Header from '../components/Header';
 import CleanerManager from '../components/CleanerManager';
-import { ArrowLeft, Users, Copy, Check, Trash2, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Users, Copy, Check, Trash2, ShieldCheck, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
 import { projectId } from '../../../utils/supabase/info';
 
 export default function GerenciarUsuarios() {
   const navigate = useNavigate();
-  const { profiles, fetchProfiles, currentOrg, accessToken } = useInventory();
+  const { profiles, fetchProfiles, currentOrg, accessToken, inviteSupervisor } = useInventory();
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [showInviteForm, setShowInviteForm] = useState(false);
+  const [inviteName, setInviteName] = useState('');
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviting, setInviting] = useState(false);
 
   const supervisorProfiles = profiles.filter(p => p.role === 'Supervisora');
 
@@ -21,6 +25,26 @@ export default function GerenciarUsuarios() {
     setCopied(true);
     toast.success('Código copiado!');
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleInviteSupervisor = async () => {
+    if (!inviteName.trim() || !inviteEmail.trim()) {
+      toast.error('Preencha nome e email');
+      return;
+    }
+
+    setInviting(true);
+    try {
+      await inviteSupervisor(inviteName.trim(), inviteEmail.trim());
+      toast.success(`Convite enviado para ${inviteEmail.trim()}!`);
+      setInviteName('');
+      setInviteEmail('');
+      setShowInviteForm(false);
+    } catch (error: any) {
+      toast.error(error.message || 'Erro ao convidar supervisora');
+    } finally {
+      setInviting(false);
+    }
   };
 
   const handleRemoveSupervisor = async (employeeId: number, name: string) => {
@@ -109,11 +133,70 @@ export default function GerenciarUsuarios() {
         </div>
       )}
 
-      {/* Supervisoras — real accounts, only join via invite code, no manual add here */}
+      {/* Supervisoras — real accounts. Invited by email, or joined via the code above */}
       <div className="relative shrink-0 w-full px-[24px] lg:px-[48px]">
-        <p className="font-['Montserrat',sans-serif] font-semibold text-[20px] lg:text-[24px] text-black mb-[12px] lg:mb-[16px]">
-          Supervisoras
-        </p>
+        <div className="flex items-center justify-between mb-[12px] lg:mb-[16px]">
+          <p className="font-['Montserrat',sans-serif] font-semibold text-[20px] lg:text-[24px] text-black">
+            Supervisoras
+          </p>
+          {!showInviteForm && (
+            <button
+              onClick={() => setShowInviteForm(true)}
+              className="flex items-center gap-[8px] px-[16px] lg:px-[20px] py-[8px] lg:py-[10px] rounded-[999999px] bg-[#0c7c97] hover:bg-[#0a6a80] transition-colors"
+            >
+              <UserPlus className="size-[16px] lg:size-[18px] text-white" />
+              <span className="font-['Montserrat',sans-serif] font-semibold text-[13px] lg:text-[14px] text-white">
+                Convidar Supervisora
+              </span>
+            </button>
+          )}
+        </div>
+
+        {showInviteForm && (
+          <div className="bg-white rounded-[16px] lg:rounded-[20px] border-2 border-[#f0f2fb] p-[20px] lg:p-[28px] mb-[16px]">
+            <p className="font-['Montserrat',sans-serif] font-semibold text-[18px] lg:text-[20px] text-black mb-[12px] lg:mb-[16px]">
+              Convidar Supervisora
+            </p>
+            <div className="flex flex-col gap-[12px]">
+              <input
+                type="text"
+                value={inviteName}
+                onChange={(e) => setInviteName(e.target.value)}
+                placeholder="Nome completo"
+                className="px-[16px] lg:px-[20px] py-[12px] lg:py-[16px] rounded-[8px] lg:rounded-[12px] border-2 border-[#f0f2fb] font-['Montserrat',sans-serif] font-medium text-[16px] lg:text-[18px] text-black focus:border-[#0c7c97] focus:outline-none transition-colors"
+              />
+              <input
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="email@exemplo.com"
+                className="px-[16px] lg:px-[20px] py-[12px] lg:py-[16px] rounded-[8px] lg:rounded-[12px] border-2 border-[#f0f2fb] font-['Montserrat',sans-serif] font-medium text-[16px] lg:text-[18px] text-black focus:border-[#0c7c97] focus:outline-none transition-colors"
+                onKeyDown={(e) => e.key === 'Enter' && handleInviteSupervisor()}
+              />
+              <div className="flex gap-[12px]">
+                <button
+                  onClick={handleInviteSupervisor}
+                  disabled={inviting || !inviteName.trim() || !inviteEmail.trim()}
+                  className="bg-[#0c7c97] hover:bg-[#0a6a80] disabled:opacity-50 disabled:cursor-not-allowed px-[24px] py-[12px] lg:py-[16px] rounded-[999999px] font-['Montserrat',sans-serif] font-semibold text-[16px] lg:text-[18px] text-white transition-colors"
+                >
+                  {inviting ? 'Enviando...' : 'Enviar Convite'}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowInviteForm(false);
+                    setInviteName('');
+                    setInviteEmail('');
+                  }}
+                  disabled={inviting}
+                  className="bg-gray-200 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed px-[24px] py-[12px] lg:py-[16px] rounded-[999999px] font-['Montserrat',sans-serif] font-semibold text-[16px] lg:text-[18px] text-gray-700 transition-colors"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="bg-white rounded-[16px] lg:rounded-[20px] border-2 border-[#f0f2fb] overflow-hidden">
           {supervisorProfiles.length === 0 ? (
             <div className="p-[32px] lg:p-[48px] text-center">
@@ -122,7 +205,7 @@ export default function GerenciarUsuarios() {
                 Nenhuma supervisora cadastrada
               </p>
               <p className="font-['Montserrat',sans-serif] font-normal text-[14px] lg:text-[16px] text-gray-500 mt-[8px]">
-                Compartilhe o código de convite acima para que uma supervisora se cadastre
+                Convide por email, ou compartilhe o código de convite acima
               </p>
             </div>
           ) : (

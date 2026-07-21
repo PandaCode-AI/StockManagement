@@ -2,7 +2,10 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { projectId, publicAnonKey } from '../../../utils/supabase/info';
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
+// Exported so pages reached via an external link (e.g. AcceptInvite, which
+// arrives from a Supabase invite-email link before the app's own session
+// state is established) can call supabase.auth directly.
+export const supabase = createClient(
   `https://${projectId}.supabase.co`,
   publicAnonKey
 );
@@ -85,6 +88,7 @@ interface InventoryContextType {
   signIn: (email: string, password: string) => Promise<void>;
   signUpCreateOrg: (email: string, password: string, name: string, orgName: string) => Promise<void>;
   signUpJoinOrg: (email: string, password: string, name: string, inviteCode: string, role: string) => Promise<void>;
+  inviteSupervisor: (name: string, email: string) => Promise<void>;
   signOut: () => Promise<void>;
   fetchItems: () => Promise<void>;
   fetchTransactions: (itemId?: string) => Promise<void>;
@@ -236,6 +240,35 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
       await signIn(email, password);
     } catch (error) {
       console.error('❌ Sign up (join org) error:', error);
+      throw error;
+    }
+  };
+
+  const inviteSupervisor = async (name: string, email: string) => {
+    try {
+      const redirectTo = `${window.location.origin}${import.meta.env.BASE_URL}accept-invite`;
+
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-264019ad/invites`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessTokenRef.current}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ name, email, redirectTo }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Falha ao convidar supervisora');
+      }
+
+      await fetchProfiles();
+    } catch (error) {
+      console.error('❌ Error inviting supervisor:', error);
       throw error;
     }
   };
@@ -717,6 +750,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
         signIn,
         signUpCreateOrg,
         signUpJoinOrg,
+        inviteSupervisor,
         signOut,
         fetchItems,
         fetchTransactions,
