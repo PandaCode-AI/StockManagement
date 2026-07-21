@@ -10,6 +10,7 @@ import RegistrarCompras from "./pages/RegistrarCompras";
 import Historico from "./pages/Historico";
 import AdicionarItem from "./pages/AdicionarItem";
 import GerenciarUsuarios from "./pages/GerenciarUsuarios";
+import GerenciarCleaners from "./pages/GerenciarCleaners";
 import Monitoramento from "./pages/Monitoramento";
 import Login from "./pages/Login";
 import JobsXml from "./pages/JobsXml";
@@ -52,6 +53,29 @@ function AdminOnlyRoute({ children }: { children: React.ReactNode }) {
   }
 
   if (currentProfile?.role !== 'Admin' && currentProfile?.role !== 'Owner') {
+    return <Navigate to="/" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+// Supervisor-or-above route wrapper (anyone who can manage Cleaners)
+function SupervisorOnlyRoute({ children }: { children: React.ReactNode }) {
+  const { currentProfile, loading } = useInventory();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Carregando...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const role = currentProfile?.role;
+  if (role !== 'Supervisora' && role !== 'Admin' && role !== 'Owner') {
     return <Navigate to="/" replace />;
   }
 
@@ -125,6 +149,14 @@ export const router = createBrowserRouter([
           <AdminOnlyRoute>
             <GerenciarUsuarios />
           </AdminOnlyRoute>
+        )
+      },
+      {
+        path: "gerenciar-cleaners",
+        element: (
+          <SupervisorOnlyRoute>
+            <GerenciarCleaners />
+          </SupervisorOnlyRoute>
         )
       },
       {

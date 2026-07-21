@@ -1114,27 +1114,29 @@ app.get("/make-server-264019ad/profiles/:id/last-movements", async (c) => {
   }
 });
 
-// Create new profile (no-login employee, used for shared-device transaction attribution)
-app.post("/make-server-264019ad/profiles", requireRole('Admin', 'Owner'), async (c) => {
+// Create new Cleaner profile (no-login employee, used for shared-device
+// transaction attribution). Deliberately always creates role='Cleaner'
+// regardless of any role sent in the body -- this is the only endpoint that
+// creates login-less profiles, so it must never be usable to mint an
+// Admin/Owner/Supervisora profile. Real accounts only come from signup.
+app.post("/make-server-264019ad/profiles", requireRole('Admin', 'Owner', 'Supervisora'), async (c) => {
   try {
     const { org_id } = c.get('profile');
     const body = await c.req.json();
-    const { full_name, role } = body;
+    const { full_name } = body;
 
-    console.log('📝 Recebendo requisição para criar profile:', { full_name, role });
+    console.log('📝 Recebendo requisição para criar cleaner:', { full_name });
 
     if (!full_name || !full_name.trim()) {
       console.log('❌ Nome vazio recebido');
       return c.json({ error: 'Nome é obrigatório' }, 400);
     }
 
-    console.log('💾 Inserindo no banco:', { full_name: full_name.trim(), role: role || 'Cleaner' });
-
     const { data, error } = await supabaseAdmin
       .from('profile')
       .insert({
         full_name: full_name.trim(),
-        role: role || 'Cleaner',
+        role: 'Cleaner',
         org_id,
         is_active: true,  // Set as active by default
       })
@@ -1154,11 +1156,29 @@ app.post("/make-server-264019ad/profiles", requireRole('Admin', 'Owner'), async 
   }
 });
 
-// Delete profile (soft delete - marks as inactive instead of deleting)
-app.delete("/make-server-264019ad/profiles/:id", requireRole('Admin', 'Owner'), async (c) => {
+// Delete profile (soft delete - marks as inactive instead of deleting).
+// Supervisora may only remove Cleaners; removing anyone else (another
+// Supervisora, Admin, or Owner) requires Admin/Owner, checked against the
+// *target's* actual role, not just the caller's.
+app.delete("/make-server-264019ad/profiles/:id", requireRole('Admin', 'Owner', 'Supervisora'), async (c) => {
   try {
-    const { org_id } = c.get('profile');
+    const { org_id, role: callerRole } = c.get('profile');
     const id = c.req.param('id');
+
+    const { data: target, error: targetError } = await supabaseAdmin
+      .from('profile')
+      .select('role')
+      .eq('employee_id', id)
+      .eq('org_id', org_id)
+      .single();
+
+    if (targetError || !target) {
+      return c.json({ error: 'Funcionário não encontrado' }, 404);
+    }
+
+    if (target.role !== 'Cleaner' && callerRole === 'Supervisora') {
+      return c.json({ error: 'Você não tem permissão para remover este usuário' }, 403);
+    }
 
     console.log('🗑️ Marcando profile como inativo:', id);
 

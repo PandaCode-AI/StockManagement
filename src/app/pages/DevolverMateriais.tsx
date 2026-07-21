@@ -109,7 +109,7 @@ export default function DevolverMateriais() {
               </label>
             </div>
             <button
-              onClick={() => navigate('/gerenciar-usuarios')}
+              onClick={() => navigate('/gerenciar-cleaners')}
               className="flex items-center gap-[8px] text-[#0c7c97] hover:text-[#0a6a80] transition-colors px-[12px] py-[8px] rounded-[8px] hover:bg-[#f0f2fb]"
               title="Gerenciar funcionários"
             >

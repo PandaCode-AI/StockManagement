@@ -189,7 +189,7 @@ export default function EntregarMateriais() {
               </label>
             </div>
             <button
-              onClick={() => navigate('/gerenciar-usuarios')}
+              onClick={() => navigate('/gerenciar-cleaners')}
               className="flex items-center gap-[6px] text-[#0c7c97] hover:text-[#0a6a80] transition-colors px-[8px] py-[6px] rounded-[6px] hover:bg-[#f0f2fb]"
               title="Gerenciar funcionários"
             >
