@@ -1,7 +1,7 @@
-# Manatee Inventory System - Design Guidelines
+# StockFlow Design Guidelines
 
 ## Overview
-This design system defines the visual language, components, and patterns for the Manatee Ladies Cleaning inventory management application. Built with React, TypeScript, and Tailwind CSS v4.
+This design system defines the visual language, components, and patterns for the StockFlow inventory management application. Built with React, TypeScript, and Tailwind CSS v4.
 
 ---
 

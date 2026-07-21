@@ -21,11 +21,11 @@ export default function NavigationFooter() {
   const isHistoryPage = location.pathname.includes('historico');
   const isMonitoringPage = location.pathname.includes('monitoramento');
 
-  const isAdmin = currentProfile?.role === 'Admin' || currentProfile?.role === 'Super';
-  const isSuper = currentProfile?.role === 'Super';
+  const isAdmin = currentProfile?.role === 'Admin' || currentProfile?.role === 'Owner';
+  const isOwner = currentProfile?.role === 'Owner';
 
-  // Grid columns: 2 for regular users, 3 for Admin, 4 for Super
-  const gridCols = isSuper ? 'grid-cols-4' : isAdmin ? 'grid-cols-3' : 'grid-cols-2';
+  // Grid columns: 2 for regular users, 3 for Admin, 4 for Owner
+  const gridCols = isOwner ? 'grid-cols-4' : isAdmin ? 'grid-cols-3' : 'grid-cols-2';
 
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-[#f0f2fb] z-50">
@@ -74,7 +74,7 @@ export default function NavigationFooter() {
           </button>
         )}
 
-        {isSuper && (
+        {isOwner && (
           <button
             onClick={() => navigate('/monitoramento')}
             className={`flex flex-col items-center justify-center py-3 px-2 transition-all ${

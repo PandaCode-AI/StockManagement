@@ -11,7 +11,7 @@ export default function EditarItem() {
   const { getItemById, updateItem, uploadItemPhoto, currentProfile } = useInventory();
 
   const item = getItemById(parseInt(id || '0'));
-  const canEdit = currentProfile?.role === 'Admin' || currentProfile?.role === 'Super';
+  const canEdit = currentProfile?.role === 'Admin' || currentProfile?.role === 'Owner';
   const canEditRestrictedFields = canEdit;
   
   const [photoFile, setPhotoFile] = useState<File | null>(null);

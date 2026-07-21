@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useInventory } from '../context/InventoryContext';
-import { projectId, publicAnonKey } from '../../../utils/supabase/info';
+import { projectId } from '../../../utils/supabase/info';
 import Header from '../components/Header';
 import { Clock, Filter, User as UserIcon, CalendarClock, ChevronDown, Loader2 } from 'lucide-react';
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '../components/ui/accordion';
@@ -35,7 +35,7 @@ function getDateFrom(range: DateRangeFilter): string | null {
 }
 
 export default function Historico() {
-  const { profiles, fetchProfiles } = useInventory();
+  const { profiles, fetchProfiles, accessToken } = useInventory();
 
   const [filter, setFilter] = useState<FilterType>('all');
   const [dateRangeFilter, setDateRangeFilter] = useState<DateRangeFilter>('all');
@@ -67,7 +67,7 @@ export default function Historico() {
 
     const response = await fetch(url.toString(), {
       headers: {
-        'Authorization': `Bearer ${publicAnonKey}`,
+        'Authorization': `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
     });
@@ -121,7 +121,7 @@ export default function Historico() {
     }
   };
 
-  const supervisors = profiles.filter(p => p.role === 'Supervisora' || p.role === 'Admin' || p.role === 'Super');
+  const supervisors = profiles.filter(p => p.role === 'Supervisora' || p.role === 'Admin' || p.role === 'Owner');
   const cleaners = profiles.filter(p => p.role === 'Cleaner');
 
   // Group loaded transactions

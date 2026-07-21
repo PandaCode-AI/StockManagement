@@ -52,6 +52,13 @@ export interface Profile {
   created_at: string;
 }
 
+export interface Organization {
+  org_id: string;
+  name: string;
+  slug?: string;
+  invite_code?: string;
+}
+
 export interface NewItemData {
   display_name: string;
   nick_name: string;
@@ -72,10 +79,12 @@ interface InventoryContextType {
   profiles: Profile[];
   currentUser: any;
   currentProfile: Profile | null;
+  currentOrg: Organization | null;
   accessToken: string | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string, name: string, role: string) => Promise<void>;
+  signUpCreateOrg: (email: string, password: string, name: string, orgName: string) => Promise<void>;
+  signUpJoinOrg: (email: string, password: string, name: string, inviteCode: string, role: string) => Promise<void>;
   signOut: () => Promise<void>;
   fetchItems: () => Promise<void>;
   fetchTransactions: (itemId?: string) => Promise<void>;
@@ -106,33 +115,27 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [currentProfile, setCurrentProfile] = useState<Profile | null>(null);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
+  const [accessToken, setAccessTokenState] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // A ref mirrors the token so functions called right after sign-in (before
+  // React re-renders) always read the fresh value instead of a stale closure.
+  const accessTokenRef = useRef<string | null>(null);
+  const setAccessToken = (token: string | null) => {
+    accessTokenRef.current = token;
+    setAccessTokenState(token);
+  };
 
   // Check for existing session on mount
   useEffect(() => {
     checkSession();
   }, []);
 
-  // Update current profile when user or profiles change
-  useEffect(() => {
-    if (currentUser?.user_metadata?.name && profiles.length > 0) {
-      const profile = profiles.find(
-        (p: Profile) => p.full_name === currentUser.user_metadata.name
-      );
-      if (profile) {
-        console.log('✅ Current profile set:', profile);
-        setCurrentProfile(profile);
-      } else {
-        console.warn('⚠️ No profile found for user:', currentUser.user_metadata.name);
-      }
-    }
-  }, [currentUser, profiles]);
-
   const checkSession = async () => {
     try {
       const { data: { session }, error } = await supabase.auth.getSession();
-      
+
       if (error) {
         console.error('❌ Error checking session:', error);
         setLoading(false);
@@ -142,11 +145,12 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
       if (session) {
         setCurrentUser(session.user);
         setAccessToken(session.access_token);
+        await fetchMe();
         await fetchItems();
         await fetchTransactions();
         await fetchProfiles();
       }
-      
+
       setLoading(false);
     } catch (error) {
       console.error('❌ Exception checking session:', error);
@@ -171,7 +175,8 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
 
       setCurrentUser(session.user);
       setAccessToken(session.access_token);
-      
+
+      await fetchMe();
       await fetchItems();
       await fetchTransactions();
       await fetchProfiles();
@@ -181,30 +186,56 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const signUp = async (email: string, password: string, name: string, role: string) => {
+  const signUpCreateOrg = async (email: string, password: string, name: string, orgName: string) => {
     try {
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-264019ad/auth/signup`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-264019ad/auth/signup-org`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${publicAnonKey}`,
           },
-          body: JSON.stringify({ email, password, name, role }),
+          body: JSON.stringify({ email, password, name, orgName }),
         }
       );
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to sign up');
+        throw new Error(data.error || 'Failed to create organization');
       }
 
-      // After signup, sign in
       await signIn(email, password);
     } catch (error) {
-      console.error('❌ Sign up error:', error);
+      console.error('❌ Sign up (create org) error:', error);
+      throw error;
+    }
+  };
+
+  const signUpJoinOrg = async (email: string, password: string, name: string, inviteCode: string, role: string) => {
+    try {
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-264019ad/auth/signup-join`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${publicAnonKey}`,
+          },
+          body: JSON.stringify({ email, password, name, inviteCode, role }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to join organization');
+      }
+
+      await signIn(email, password);
+    } catch (error) {
+      console.error('❌ Sign up (join org) error:', error);
       throw error;
     }
   };
@@ -214,6 +245,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
       await supabase.auth.signOut();
       setCurrentUser(null);
       setCurrentProfile(null);
+      setCurrentOrg(null);
       setAccessToken(null);
       setItems([]);
       setTransactions([]);
@@ -224,13 +256,38 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const fetchMe = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-264019ad/me`,
+        {
+          headers: {
+            'Authorization': `Bearer ${accessTokenRef.current}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch current user');
+      }
+
+      setCurrentProfile(data.profile || null);
+      setCurrentOrg(data.organization || null);
+    } catch (error) {
+      console.error('❌ Error fetching /me:', error);
+    }
+  }, []);
+
   const fetchItems = useCallback(async () => {
     try {
       const response = await fetch(
         `https://${projectId}.supabase.co/functions/v1/make-server-264019ad/items`,
         {
           headers: {
-            'Authorization': `Bearer ${publicAnonKey}`,
+            'Authorization': `Bearer ${accessTokenRef.current}`,
             'Content-Type': 'application/json',
           },
         }
@@ -269,7 +326,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
 
       const response = await fetch(url.toString(), {
         headers: {
-          'Authorization': `Bearer ${publicAnonKey}`,
+          'Authorization': `Bearer ${accessTokenRef.current}`,
           'Content-Type': 'application/json',
         },
       });
@@ -303,7 +360,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
 
       const response = await fetch(url.toString(), {
         headers: {
-          'Authorization': `Bearer ${publicAnonKey}`,
+          'Authorization': `Bearer ${accessTokenRef.current}`,
           'Content-Type': 'application/json',
         },
       });
@@ -325,7 +382,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
         `https://${projectId}.supabase.co/functions/v1/make-server-264019ad/profiles`,
         {
           headers: {
-            'Authorization': `Bearer ${publicAnonKey}`,
+            'Authorization': `Bearer ${accessTokenRef.current}`,
             'Content-Type': 'application/json',
           },
         }
@@ -350,7 +407,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${publicAnonKey}`,
+            'Authorization': `Bearer ${accessTokenRef.current}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ item_id: itemId, quantity, removed_by_id: removedById, received_by_id: receivedById }),
@@ -378,7 +435,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${publicAnonKey}`,
+            'Authorization': `Bearer ${accessTokenRef.current}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ item_id: itemId, quantity, removed_by_id: removedById, received_by_id: receivedById }),
@@ -406,7 +463,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${publicAnonKey}`,
+            'Authorization': `Bearer ${accessTokenRef.current}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ item_id: itemId, quantity, employee_id: employeeId }),
@@ -434,7 +491,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
         {
           method: 'PUT',
           headers: {
-            'Authorization': `Bearer ${publicAnonKey}`,
+            'Authorization': `Bearer ${accessTokenRef.current}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(updates),
@@ -465,7 +522,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${publicAnonKey}`,
+            'Authorization': `Bearer ${accessTokenRef.current}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
@@ -501,7 +558,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${publicAnonKey}`,
+            'Authorization': `Bearer ${accessTokenRef.current}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
@@ -536,7 +593,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${publicAnonKey}`,
+            'Authorization': `Bearer ${accessTokenRef.current}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
@@ -566,7 +623,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
     form.append('photo', new File([compressed], 'photo.webp', { type: 'image/webp' }));
     const response = await fetch(
       `https://${projectId}.supabase.co/functions/v1/make-server-264019ad/items/upload-photo`,
-      { method: 'POST', headers: { 'Authorization': `Bearer ${publicAnonKey}` }, body: form }
+      { method: 'POST', headers: { 'Authorization': `Bearer ${accessTokenRef.current}` }, body: form }
     );
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Falha ao fazer upload da foto');
@@ -612,7 +669,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
         `https://${projectId}.supabase.co/functions/v1/make-server-264019ad/items/upload-photo`,
         {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${publicAnonKey}` },
+          headers: { 'Authorization': `Bearer ${accessTokenRef.current}` },
           body: form,
         }
       );
@@ -624,7 +681,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
         `https://${projectId}.supabase.co/functions/v1/make-server-264019ad/items`,
         {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${publicAnonKey}`, 'Content-Type': 'application/json' },
+          headers: { 'Authorization': `Bearer ${accessTokenRef.current}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...data, photo_link: uploadResult.url }),
         }
       );
@@ -654,10 +711,12 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
         profiles,
         currentUser,
         currentProfile,
+        currentOrg,
         accessToken,
         loading,
         signIn,
-        signUp,
+        signUpCreateOrg,
+        signUpJoinOrg,
         signOut,
         fetchItems,
         fetchTransactions,

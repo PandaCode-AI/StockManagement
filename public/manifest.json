@@ -1,7 +1,7 @@
 {
-  "name": "Sistema de Estoque Manatee",
-  "short_name": "Estoque Manatee",
-  "description": "Sistema de gestao de estoque para Manatee Ladies Cleaning",
+  "name": "StockFlow",
+  "short_name": "StockFlow",
+  "description": "Sistema de gestao de estoque StockFlow",
   "start_url": "/StockManagement/",
   "display": "standalone",
   "background_color": "#fafafa",

@@ -36,7 +36,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-// Admin-only route wrapper (includes Super users)
+// Admin-only route wrapper (includes the org's Owner)
 function AdminOnlyRoute({ children }: { children: React.ReactNode }) {
   const { currentProfile, loading } = useInventory();
 
@@ -51,15 +51,15 @@ function AdminOnlyRoute({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (currentProfile?.role !== 'Admin' && currentProfile?.role !== 'Super') {
+  if (currentProfile?.role !== 'Admin' && currentProfile?.role !== 'Owner') {
     return <Navigate to="/" replace />;
   }
 
   return <>{children}</>;
 }
 
-// Super-only route wrapper
-function SuperOnlyRoute({ children }: { children: React.ReactNode }) {
+// Owner-only route wrapper (this organization's highest authority)
+function OwnerOnlyRoute({ children }: { children: React.ReactNode }) {
   const { currentProfile, loading } = useInventory();
 
   if (loading) {
@@ -73,7 +73,7 @@ function SuperOnlyRoute({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (currentProfile?.role !== 'Super') {
+  if (currentProfile?.role !== 'Owner') {
     return <Navigate to="/" replace />;
   }
 
@@ -123,9 +123,9 @@ export const router = createBrowserRouter([
       {
         path: "monitoramento",
         element: (
-          <SuperOnlyRoute>
+          <OwnerOnlyRoute>
             <Monitoramento />
-          </SuperOnlyRoute>
+          </OwnerOnlyRoute>
         )
       },
     ],

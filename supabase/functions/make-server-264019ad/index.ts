@@ -3,7 +3,20 @@ import { cors } from "npm:hono/cors";
 import { logger } from "npm:hono/logger";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-const app = new Hono();
+type AuthedProfile = {
+  employee_id: number;
+  org_id: string;
+  role: string;
+  full_name: string;
+  is_active: boolean;
+};
+
+type Variables = {
+  profile: AuthedProfile;
+  authUserId: string;
+};
+
+const app = new Hono<{ Variables: Variables }>();
 
 // Initialize Supabase clients
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -31,6 +44,76 @@ app.use(
     maxAge: 600,
   }),
 );
+
+// ==================== TENANT HELPERS ====================
+
+function slugify(name: string): string {
+  const base = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'org';
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return `${base}-${suffix}`;
+}
+
+function generateInviteCode(): string {
+  return Math.random().toString(36).slice(2, 10).toUpperCase();
+}
+
+// Paths that don't require an authenticated + org-linked caller.
+const PUBLIC_PATHS = new Set([
+  '/make-server-264019ad/health',
+  '/make-server-264019ad/jobs.xml',
+  '/make-server-264019ad/auth/signup-org',
+  '/make-server-264019ad/auth/signup-join',
+]);
+
+// Verifies the caller's real session (not the shared anon key) and resolves
+// their org/role server-side — every route below trusts c.get('profile'),
+// never a client-supplied org_id.
+app.use('*', async (c, next) => {
+  if (c.req.method === 'OPTIONS' || PUBLIC_PATHS.has(c.req.path)) {
+    return next();
+  }
+
+  const token = (c.req.header('Authorization') || '').replace(/^Bearer\s+/i, '');
+  if (!token) {
+    return c.json({ error: 'Missing authorization' }, 401);
+  }
+
+  const { data: userData, error: authErr } = await supabaseAdmin.auth.getUser(token);
+  if (authErr || !userData?.user) {
+    return c.json({ error: 'Invalid or expired session' }, 401);
+  }
+
+  const { data: profile, error: profErr } = await supabaseAdmin
+    .from('profile')
+    .select('employee_id, org_id, role, full_name, is_active')
+    .eq('auth_user_id', userData.user.id)
+    .single();
+
+  if (profErr || !profile) {
+    return c.json({ error: 'No profile linked to this account' }, 403);
+  }
+  if (profile.is_active === false) {
+    return c.json({ error: 'Account disabled' }, 403);
+  }
+
+  c.set('authUserId', userData.user.id);
+  c.set('profile', profile as AuthedProfile);
+  await next();
+});
+
+function requireRole(...roles: string[]) {
+  return async (c: any, next: any) => {
+    const profile = c.get('profile') as AuthedProfile;
+    if (!roles.includes(profile.role)) {
+      return c.json({ error: 'Forbidden' }, 403);
+    }
+    await next();
+  };
+}
 
 // Health check endpoint
 app.get("/make-server-264019ad/health", (c) => {
@@ -64,58 +147,168 @@ app.get("/make-server-264019ad/jobs.xml", (c) => {
 
 // ==================== AUTH ROUTES ====================
 
-// Sign up new user (creates profile in database)
-app.post("/make-server-264019ad/auth/signup", async (c) => {
+// Sign up and create a brand-new organization (caller becomes its Owner)
+app.post("/make-server-264019ad/auth/signup-org", async (c) => {
+  let createdUserId: string | undefined;
+  let createdOrgId: string | undefined;
   try {
-    const { email, password, name, role } = await c.req.json();
+    const { email, password, name, orgName } = await c.req.json();
 
-    console.log('📝 Creating user:', email);
+    if (!orgName || !orgName.trim()) {
+      return c.json({ error: 'Nome da organização é obrigatório' }, 400);
+    }
 
-    // Create user with Supabase Auth
+    console.log('📝 Creating org owner:', email);
+
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
       email_confirm: true, // Auto-confirm since email server not configured
-      user_metadata: { name, email, role }
+      user_metadata: { name, email },
     });
 
     if (authError) {
       console.error('❌ Auth error:', authError);
-
-      // Provide user-friendly error messages
       if (authError.message.includes('already been registered') || authError.status === 422) {
         return c.json({ error: 'Este email já está cadastrado no sistema' }, 400);
       }
-
       return c.json({ error: authError.message }, 400);
     }
+    createdUserId = authData.user.id;
 
-    // Create profile in database
+    const { data: org, error: orgError } = await supabaseAdmin
+      .from('organizations')
+      .insert({ name: orgName.trim(), slug: slugify(orgName), invite_code: generateInviteCode() })
+      .select()
+      .single();
+
+    if (orgError) {
+      console.error('❌ Org creation error:', orgError);
+      await supabaseAdmin.auth.admin.deleteUser(createdUserId);
+      return c.json({ error: orgError.message }, 400);
+    }
+    createdOrgId = org.org_id;
+
     const { error: profileError } = await supabaseAdmin
       .from('profile')
       .insert({
         full_name: name,
-        role: role || 'Cleaner'
+        role: 'Owner',
+        org_id: org.org_id,
+        auth_user_id: createdUserId,
+        is_active: true,
       });
 
     if (profileError) {
       console.error('❌ Profile error:', profileError);
+      await supabaseAdmin.auth.admin.deleteUser(createdUserId);
+      await supabaseAdmin.from('organizations').delete().eq('org_id', createdOrgId);
       return c.json({ error: profileError.message }, 400);
     }
 
-    console.log('✅ User created successfully');
-    return c.json({ 
+    console.log('✅ Organization + owner created:', org.org_id);
+    return c.json({
       success: true,
-      user: {
-        id: authData.user.id,
-        email: authData.user.email,
-        name,
-        role
-      }
+      user: { id: createdUserId, email: authData.user.email, name, role: 'Owner' },
+      organization: { org_id: org.org_id, name: org.name, slug: org.slug, invite_code: org.invite_code },
     });
   } catch (error) {
-    console.error('❌ Signup exception:', error);
-    return c.json({ error: 'Failed to create user' }, 500);
+    console.error('❌ Signup-org exception:', error);
+    // Best-effort cleanup so a failed signup never leaves an orphaned auth user/org behind
+    if (createdUserId) await supabaseAdmin.auth.admin.deleteUser(createdUserId).catch(() => {});
+    if (createdOrgId) await supabaseAdmin.from('organizations').delete().eq('org_id', createdOrgId).catch(() => {});
+    return c.json({ error: 'Failed to create organization' }, 500);
+  }
+});
+
+// Sign up and join an existing organization via its invite code
+app.post("/make-server-264019ad/auth/signup-join", async (c) => {
+  let createdUserId: string | undefined;
+  try {
+    const { email, password, name, inviteCode, role } = await c.req.json();
+
+    if (!inviteCode || !inviteCode.trim()) {
+      return c.json({ error: 'Código de convite é obrigatório' }, 400);
+    }
+
+    const { data: org, error: orgLookupError } = await supabaseAdmin
+      .from('organizations')
+      .select('org_id, name')
+      .eq('invite_code', inviteCode.trim().toUpperCase())
+      .single();
+
+    if (orgLookupError || !org) {
+      return c.json({ error: 'Código de convite inválido' }, 400);
+    }
+
+    console.log('📝 Creating user joining org:', email, org.org_id);
+
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { name, email },
+    });
+
+    if (authError) {
+      console.error('❌ Auth error:', authError);
+      if (authError.message.includes('already been registered') || authError.status === 422) {
+        return c.json({ error: 'Este email já está cadastrado no sistema' }, 400);
+      }
+      return c.json({ error: authError.message }, 400);
+    }
+    createdUserId = authData.user.id;
+
+    const finalRole = role || 'Cleaner';
+    const { error: profileError } = await supabaseAdmin
+      .from('profile')
+      .insert({
+        full_name: name,
+        role: finalRole,
+        org_id: org.org_id,
+        auth_user_id: createdUserId,
+        is_active: true,
+      });
+
+    if (profileError) {
+      console.error('❌ Profile error:', profileError);
+      await supabaseAdmin.auth.admin.deleteUser(createdUserId);
+      return c.json({ error: profileError.message }, 400);
+    }
+
+    console.log('✅ User joined organization:', org.org_id);
+    return c.json({
+      success: true,
+      user: { id: createdUserId, email: authData.user.email, name, role: finalRole },
+      organization: { org_id: org.org_id, name: org.name },
+    });
+  } catch (error) {
+    console.error('❌ Signup-join exception:', error);
+    if (createdUserId) await supabaseAdmin.auth.admin.deleteUser(createdUserId).catch(() => {});
+    return c.json({ error: 'Failed to join organization' }, 500);
+  }
+});
+
+// Current caller's profile + organization — replaces client-side name-matching
+app.get("/make-server-264019ad/me", async (c) => {
+  try {
+    const profile = c.get('profile');
+    const canSeeInviteCode = profile.role === 'Admin' || profile.role === 'Owner';
+
+    const { data: org, error } = await supabaseAdmin
+      .from('organizations')
+      .select(canSeeInviteCode ? 'org_id, name, slug, invite_code' : 'org_id, name, slug')
+      .eq('org_id', profile.org_id)
+      .single();
+
+    if (error || !org) {
+      return c.json({ error: 'Organization not found' }, 404);
+    }
+
+    return c.json({ profile, organization: org });
+  } catch (error) {
+    console.error('❌ Exception fetching /me:', error);
+    return c.json({ error: 'Failed to fetch current user' }, 500);
   }
 });
 
@@ -124,9 +317,11 @@ app.post("/make-server-264019ad/auth/signup", async (c) => {
 // Get all items
 app.get("/make-server-264019ad/items", async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const { data, error } = await supabaseAdmin
       .from('items')
       .select('*')
+      .eq('org_id', org_id)
       .order('display_name', { ascending: true });
 
     if (error) {
@@ -144,12 +339,14 @@ app.get("/make-server-264019ad/items", async (c) => {
 // Get single item by ID
 app.get("/make-server-264019ad/items/:id", async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const id = c.req.param('id');
-    
+
     const { data, error } = await supabaseAdmin
       .from('items')
       .select('*')
       .eq('item_id', id)
+      .eq('org_id', org_id)
       .single();
 
     if (error) {
@@ -165,13 +362,15 @@ app.get("/make-server-264019ad/items/:id", async (c) => {
 });
 
 // Create new item
-app.post("/make-server-264019ad/items", async (c) => {
+app.post("/make-server-264019ad/items", requireRole('Admin', 'Owner'), async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const itemData = await c.req.json();
-    
+    delete itemData.org_id;
+
     const { data, error } = await supabaseAdmin
       .from('items')
-      .insert(itemData)
+      .insert({ ...itemData, org_id })
       .select()
       .single();
 
@@ -189,15 +388,18 @@ app.post("/make-server-264019ad/items", async (c) => {
 });
 
 // Update item
-app.put("/make-server-264019ad/items/:id", async (c) => {
+app.put("/make-server-264019ad/items/:id", requireRole('Admin', 'Owner'), async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const id = c.req.param('id');
     const updates = await c.req.json();
-    
+    delete updates.org_id;
+
     const { data, error } = await supabaseAdmin
       .from('items')
       .update(updates)
       .eq('item_id', id)
+      .eq('org_id', org_id)
       .select()
       .single();
 
@@ -215,14 +417,16 @@ app.put("/make-server-264019ad/items/:id", async (c) => {
 });
 
 // Delete item
-app.delete("/make-server-264019ad/items/:id", async (c) => {
+app.delete("/make-server-264019ad/items/:id", requireRole('Admin', 'Owner'), async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const id = c.req.param('id');
-    
+
     const { error } = await supabaseAdmin
       .from('items')
       .delete()
-      .eq('item_id', id);
+      .eq('item_id', id)
+      .eq('org_id', org_id);
 
     if (error) {
       console.error('❌ Error deleting item:', error);
@@ -242,6 +446,7 @@ app.delete("/make-server-264019ad/items/:id", async (c) => {
 // Get all transactions (with filters and pagination)
 app.get("/make-server-264019ad/transactions", async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const itemId = c.req.query('item_id');
     const type = c.req.query('type');
     const supervisorId = c.req.query('supervisor_id');
@@ -275,6 +480,7 @@ app.get("/make-server-264019ad/transactions", async (c) => {
 
     // Base filters shared by data query and count queries (excludes type filter)
     const applyBaseFilters = (q: any) => {
+      q = q.eq('org_id', org_id);
       if (itemId) q = q.eq('item_id', itemId);
       if (dateFrom) q = q.gte('transaction_date', dateFrom);
       if (supervisorId) q = q.or(`removed_by_id.eq.${supervisorId},received_by_id.eq.${supervisorId}`);
@@ -340,13 +546,15 @@ app.get("/make-server-264019ad/transactions", async (c) => {
 // Create transaction (stock out - entrega)
 app.post("/make-server-264019ad/transactions/stock-out", async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const { item_id, quantity, removed_by_id, received_by_id } = await c.req.json();
 
-    // Get current stock
+    // Get current stock (scoped to this org — a cross-tenant item_id guess 404s instead of leaking)
     const { data: item, error: itemError } = await supabaseAdmin
       .from('items')
       .select('in_stock')
       .eq('item_id', item_id)
+      .eq('org_id', org_id)
       .single();
 
     if (itemError || !item) {
@@ -365,7 +573,8 @@ app.post("/make-server-264019ad/transactions/stock-out", async (c) => {
         removed_by_id,
         received_by_id,
         transaction_type: 'stock_out',
-        quantity
+        quantity,
+        org_id,
       })
       .select()
       .single();
@@ -380,7 +589,8 @@ app.post("/make-server-264019ad/transactions/stock-out", async (c) => {
     const { error: updateError } = await supabaseAdmin
       .from('items')
       .update({ in_stock: newStock })
-      .eq('item_id', item_id);
+      .eq('item_id', item_id)
+      .eq('org_id', org_id);
 
     if (updateError) {
       console.error('❌ Error updating stock:', updateError);
@@ -394,19 +604,21 @@ app.post("/make-server-264019ad/transactions/stock-out", async (c) => {
         .upsert({
           user_id: removed_by_id,
           item_id: item_id,
-          last_movement: new Date().toISOString()
+          last_movement: new Date().toISOString(),
+          org_id,
         }, {
           onConflict: 'user_id,item_id'
         });
     }
-    
+
     if (received_by_id) {
       await supabaseAdmin
         .from('last_movements')
         .upsert({
           user_id: received_by_id,
           item_id: item_id,
-          last_movement: new Date().toISOString()
+          last_movement: new Date().toISOString(),
+          org_id,
         }, {
           onConflict: 'user_id,item_id'
         });
@@ -423,12 +635,14 @@ app.post("/make-server-264019ad/transactions/stock-out", async (c) => {
 // Create transaction (return - devolução)
 app.post("/make-server-264019ad/transactions/return", async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const { item_id, quantity, removed_by_id, received_by_id } = await c.req.json();
 
     const { data: item, error: itemError } = await supabaseAdmin
       .from('items')
       .select('in_stock')
       .eq('item_id', item_id)
+      .eq('org_id', org_id)
       .single();
 
     if (itemError || !item) {
@@ -443,7 +657,8 @@ app.post("/make-server-264019ad/transactions/return", async (c) => {
         removed_by_id,
         received_by_id,
         transaction_type: 'return',
-        quantity
+        quantity,
+        org_id,
       })
       .select()
       .single();
@@ -458,7 +673,8 @@ app.post("/make-server-264019ad/transactions/return", async (c) => {
     const { error: updateError } = await supabaseAdmin
       .from('items')
       .update({ in_stock: newStock })
-      .eq('item_id', item_id);
+      .eq('item_id', item_id)
+      .eq('org_id', org_id);
 
     if (updateError) {
       console.error('❌ Error updating stock:', updateError);
@@ -472,19 +688,21 @@ app.post("/make-server-264019ad/transactions/return", async (c) => {
         .upsert({
           user_id: removed_by_id,
           item_id: item_id,
-          last_movement: new Date().toISOString()
+          last_movement: new Date().toISOString(),
+          org_id,
         }, {
           onConflict: 'user_id,item_id'
         });
     }
-    
+
     if (received_by_id) {
       await supabaseAdmin
         .from('last_movements')
         .upsert({
           user_id: received_by_id,
           item_id: item_id,
-          last_movement: new Date().toISOString()
+          last_movement: new Date().toISOString(),
+          org_id,
         }, {
           onConflict: 'user_id,item_id'
         });
@@ -501,12 +719,14 @@ app.post("/make-server-264019ad/transactions/return", async (c) => {
 // Create transaction (stock in - compra)
 app.post("/make-server-264019ad/transactions/stock-in", async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const { item_id, quantity, employee_id } = await c.req.json();
 
     const { data: item, error: itemError } = await supabaseAdmin
       .from('items')
       .select('in_stock')
       .eq('item_id', item_id)
+      .eq('org_id', org_id)
       .single();
 
     if (itemError || !item) {
@@ -520,7 +740,8 @@ app.post("/make-server-264019ad/transactions/stock-in", async (c) => {
         item_id,
         received_by_id: employee_id,
         transaction_type: 'stock_in',
-        quantity
+        quantity,
+        org_id,
       })
       .select()
       .single();
@@ -535,7 +756,8 @@ app.post("/make-server-264019ad/transactions/stock-in", async (c) => {
     const { error: updateError } = await supabaseAdmin
       .from('items')
       .update({ in_stock: newStock })
-      .eq('item_id', item_id);
+      .eq('item_id', item_id)
+      .eq('org_id', org_id);
 
     if (updateError) {
       console.error('❌ Error updating stock:', updateError);
@@ -548,7 +770,8 @@ app.post("/make-server-264019ad/transactions/stock-in", async (c) => {
       .upsert({
         user_id: employee_id,
         item_id: item_id,
-        last_movement: new Date().toISOString()
+        last_movement: new Date().toISOString(),
+        org_id,
       }, {
         onConflict: 'user_id,item_id'
       });
@@ -566,6 +789,7 @@ app.post("/make-server-264019ad/transactions/stock-in", async (c) => {
 // Upload item photo to Supabase Storage (uses service role to bypass RLS)
 app.post("/make-server-264019ad/items/upload-photo", async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const formData = await c.req.formData();
     const file = formData.get('photo') as File | null;
 
@@ -575,7 +799,8 @@ app.post("/make-server-264019ad/items/upload-photo", async (c) => {
 
     const arrayBuffer = await file.arrayBuffer();
     const rawName = (formData.get('filename') as string | null)?.trim();
-    const fileName = rawName ? `${rawName}.webp` : `${Date.now()}-${Math.random().toString(36).slice(2)}.webp`;
+    const baseName = rawName || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const fileName = `${org_id}/${baseName}.webp`;
 
     const { error } = await supabaseAdmin.storage
       .from('Produtos')
@@ -601,6 +826,7 @@ app.post("/make-server-264019ad/items/upload-photo", async (c) => {
 // Batch stock out (entrega de múltiplos itens em 1 request)
 app.post("/make-server-264019ad/transactions/batch/stock-out", async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const { items, removed_by_id, received_by_id } = await c.req.json();
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -610,10 +836,11 @@ app.post("/make-server-264019ad/transactions/batch/stock-out", async (c) => {
     const itemIds = items.map((i: any) => i.item_id);
     const now = new Date().toISOString();
 
-    // Fetch all items at once
+    // Fetch all items at once, scoped to this org
     const { data: stockItems, error: stockError } = await supabaseAdmin
       .from('items')
       .select('item_id, in_stock')
+      .eq('org_id', org_id)
       .in('item_id', itemIds);
 
     if (stockError || !stockItems) {
@@ -639,6 +866,7 @@ app.post("/make-server-264019ad/transactions/batch/stock-out", async (c) => {
           received_by_id,
           transaction_type: 'stock_out',
           quantity,
+          org_id,
         }))
       );
 
@@ -652,15 +880,15 @@ app.post("/make-server-264019ad/transactions/batch/stock-out", async (c) => {
       items.map(({ item_id, quantity }: any) => {
         const stockItem = stockItems.find((s: any) => s.item_id === item_id);
         const newStock = Number(stockItem!.in_stock) - Number(quantity);
-        return supabaseAdmin.from('items').update({ in_stock: newStock }).eq('item_id', item_id);
+        return supabaseAdmin.from('items').update({ in_stock: newStock }).eq('item_id', item_id).eq('org_id', org_id);
       })
     );
 
     // Upsert last_movements for both users (all items at once)
     const movementRows: any[] = [];
     for (const { item_id } of items) {
-      if (removed_by_id) movementRows.push({ user_id: removed_by_id, item_id, last_movement: now });
-      if (received_by_id) movementRows.push({ user_id: received_by_id, item_id, last_movement: now });
+      if (removed_by_id) movementRows.push({ user_id: removed_by_id, item_id, last_movement: now, org_id });
+      if (received_by_id) movementRows.push({ user_id: received_by_id, item_id, last_movement: now, org_id });
     }
     if (movementRows.length > 0) {
       await supabaseAdmin.from('last_movements').upsert(movementRows, { onConflict: 'user_id,item_id' });
@@ -677,6 +905,7 @@ app.post("/make-server-264019ad/transactions/batch/stock-out", async (c) => {
 // Batch return (devolução de múltiplos itens em 1 request)
 app.post("/make-server-264019ad/transactions/batch/return", async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const { items, removed_by_id, received_by_id } = await c.req.json();
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -689,6 +918,7 @@ app.post("/make-server-264019ad/transactions/batch/return", async (c) => {
     const { data: stockItems, error: stockError } = await supabaseAdmin
       .from('items')
       .select('item_id, in_stock')
+      .eq('org_id', org_id)
       .in('item_id', itemIds);
 
     if (stockError || !stockItems) {
@@ -704,6 +934,7 @@ app.post("/make-server-264019ad/transactions/batch/return", async (c) => {
           received_by_id,
           transaction_type: 'return',
           quantity,
+          org_id,
         }))
       );
 
@@ -716,14 +947,14 @@ app.post("/make-server-264019ad/transactions/batch/return", async (c) => {
       items.map(({ item_id, quantity }: any) => {
         const stockItem = stockItems.find((s: any) => s.item_id === item_id);
         const newStock = Number(stockItem!.in_stock) + Number(quantity);
-        return supabaseAdmin.from('items').update({ in_stock: newStock }).eq('item_id', item_id);
+        return supabaseAdmin.from('items').update({ in_stock: newStock }).eq('item_id', item_id).eq('org_id', org_id);
       })
     );
 
     const movementRows: any[] = [];
     for (const { item_id } of items) {
-      if (removed_by_id) movementRows.push({ user_id: removed_by_id, item_id, last_movement: now });
-      if (received_by_id) movementRows.push({ user_id: received_by_id, item_id, last_movement: now });
+      if (removed_by_id) movementRows.push({ user_id: removed_by_id, item_id, last_movement: now, org_id });
+      if (received_by_id) movementRows.push({ user_id: received_by_id, item_id, last_movement: now, org_id });
     }
     if (movementRows.length > 0) {
       await supabaseAdmin.from('last_movements').upsert(movementRows, { onConflict: 'user_id,item_id' });
@@ -740,6 +971,7 @@ app.post("/make-server-264019ad/transactions/batch/return", async (c) => {
 // Batch stock in (compra de múltiplos itens em 1 request)
 app.post("/make-server-264019ad/transactions/batch/stock-in", async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const { items, employee_id } = await c.req.json();
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -752,6 +984,7 @@ app.post("/make-server-264019ad/transactions/batch/stock-in", async (c) => {
     const { data: stockItems, error: stockError } = await supabaseAdmin
       .from('items')
       .select('item_id, in_stock')
+      .eq('org_id', org_id)
       .in('item_id', itemIds);
 
     if (stockError || !stockItems) {
@@ -766,6 +999,7 @@ app.post("/make-server-264019ad/transactions/batch/stock-in", async (c) => {
           received_by_id: employee_id,
           transaction_type: 'stock_in',
           quantity,
+          org_id,
         }))
       );
 
@@ -778,7 +1012,7 @@ app.post("/make-server-264019ad/transactions/batch/stock-in", async (c) => {
       items.map(({ item_id, quantity }: any) => {
         const stockItem = stockItems.find((s: any) => s.item_id === item_id);
         const newStock = Number(stockItem!.in_stock) + Number(quantity);
-        return supabaseAdmin.from('items').update({ in_stock: newStock }).eq('item_id', item_id);
+        return supabaseAdmin.from('items').update({ in_stock: newStock }).eq('item_id', item_id).eq('org_id', org_id);
       })
     );
 
@@ -786,6 +1020,7 @@ app.post("/make-server-264019ad/transactions/batch/stock-in", async (c) => {
       user_id: employee_id,
       item_id,
       last_movement: now,
+      org_id,
     }));
     await supabaseAdmin.from('last_movements').upsert(movementRows, { onConflict: 'user_id,item_id' });
 
@@ -802,12 +1037,14 @@ app.post("/make-server-264019ad/transactions/batch/stock-in", async (c) => {
 // Get profile by employee_id
 app.get("/make-server-264019ad/profile/:id", async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const id = c.req.param('id');
-    
+
     const { data, error } = await supabaseAdmin
       .from('profile')
       .select('*')
       .eq('employee_id', id)
+      .eq('org_id', org_id)
       .single();
 
     if (error) {
@@ -825,9 +1062,11 @@ app.get("/make-server-264019ad/profile/:id", async (c) => {
 // Get all profiles
 app.get("/make-server-264019ad/profiles", async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const { data, error } = await supabaseAdmin
       .from('profile')
       .select('*')
+      .eq('org_id', org_id)
       .order('full_name', { ascending: true });
 
     if (error) {
@@ -848,12 +1087,14 @@ app.get("/make-server-264019ad/profiles", async (c) => {
 // Get last movements for a specific employee (reads from last_movements table — O(items) not O(transactions))
 app.get("/make-server-264019ad/profiles/:id/last-movements", async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const employeeId = c.req.param('id');
 
     const { data, error } = await supabaseAdmin
       .from('last_movements')
       .select('item_id, last_movement')
-      .eq('user_id', employeeId);
+      .eq('user_id', employeeId)
+      .eq('org_id', org_id);
 
     if (error) {
       console.error('❌ Error fetching last movements:', error);
@@ -873,9 +1114,10 @@ app.get("/make-server-264019ad/profiles/:id/last-movements", async (c) => {
   }
 });
 
-// Create new profile
-app.post("/make-server-264019ad/profiles", async (c) => {
+// Create new profile (no-login employee, used for shared-device transaction attribution)
+app.post("/make-server-264019ad/profiles", requireRole('Admin', 'Owner'), async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const body = await c.req.json();
     const { full_name, role } = body;
 
@@ -893,7 +1135,8 @@ app.post("/make-server-264019ad/profiles", async (c) => {
       .insert({
         full_name: full_name.trim(),
         role: role || 'Cleaner',
-        is_active: true  // Set as active by default
+        org_id,
+        is_active: true,  // Set as active by default
       })
       .select()
       .single();
@@ -912,8 +1155,9 @@ app.post("/make-server-264019ad/profiles", async (c) => {
 });
 
 // Delete profile (soft delete - marks as inactive instead of deleting)
-app.delete("/make-server-264019ad/profiles/:id", async (c) => {
+app.delete("/make-server-264019ad/profiles/:id", requireRole('Admin', 'Owner'), async (c) => {
   try {
+    const { org_id } = c.get('profile');
     const id = c.req.param('id');
 
     console.log('🗑️ Marcando profile como inativo:', id);
@@ -922,7 +1166,8 @@ app.delete("/make-server-264019ad/profiles/:id", async (c) => {
     const { error } = await supabaseAdmin
       .from('profile')
       .update({ is_active: false })
-      .eq('employee_id', id);
+      .eq('employee_id', id)
+      .eq('org_id', org_id);
 
     if (error) {
       console.error('❌ Error marking profile as inactive:', error);

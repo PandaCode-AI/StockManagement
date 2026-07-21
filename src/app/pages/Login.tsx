@@ -9,15 +9,20 @@ import imgLogo from 'figma:asset/08d20ecb15948845987a58e1893d9942aa75c450.png';
 
 export default function Login() {
   const navigate = useNavigate();
-  const { signIn, signUp } = useInventory();
+  const { signIn, signUpCreateOrg, signUpJoinOrg } = useInventory();
 
   const [activeTab, setActiveTab] = useState<'login' | 'signup'>('login');
+  const [signupMode, setSignupMode] = useState<'create' | 'join'>('create');
+
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+
   const [signupEmail, setSignupEmail] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
   const [signupName, setSignupName] = useState('');
   const [signupRole, setSignupRole] = useState('Cleaner');
+  const [orgName, setOrgName] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -37,11 +42,14 @@ export default function Login() {
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-
     setLoading(true);
 
     try {
-      await signUp(signupEmail, signupPassword, signupName, signupRole);
+      if (signupMode === 'create') {
+        await signUpCreateOrg(signupEmail, signupPassword, signupName, orgName);
+      } else {
+        await signUpJoinOrg(signupEmail, signupPassword, signupName, inviteCode, signupRole);
+      }
       toast.success('Conta criada com sucesso!');
       navigate('/');
     } catch (error: any) {
@@ -56,7 +64,7 @@ export default function Login() {
       <div className="w-full max-w-[480px]">
         <div className="flex justify-center mb-8">
           <img
-            alt="Manatee Logo"
+            alt="StockFlow Logo"
             className="h-[80px] w-auto object-contain"
             src={imgLogo}
           />
@@ -138,6 +146,31 @@ export default function Login() {
             </form>
           ) : (
             <form onSubmit={handleSignup} className="space-y-6">
+              <div className="grid grid-cols-2 gap-2 bg-[#f0f2fb] rounded-xl p-1">
+                <button
+                  type="button"
+                  onClick={() => setSignupMode('create')}
+                  className={`font-['Montserrat',sans-serif] font-semibold text-[13px] lg:text-[14px] py-2 px-3 rounded-lg transition-all ${
+                    signupMode === 'create'
+                      ? 'bg-[#0c7c97] text-white shadow-md'
+                      : 'bg-transparent text-[#323232] hover:bg-white/50'
+                  }`}
+                >
+                  Criar organização
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSignupMode('join')}
+                  className={`font-['Montserrat',sans-serif] font-semibold text-[13px] lg:text-[14px] py-2 px-3 rounded-lg transition-all ${
+                    signupMode === 'join'
+                      ? 'bg-[#0c7c97] text-white shadow-md'
+                      : 'bg-transparent text-[#323232] hover:bg-white/50'
+                  }`}
+                >
+                  Entrar com convite
+                </button>
+              </div>
+
               <div className="space-y-2">
                 <label className="font-['Montserrat',sans-serif] font-medium text-[14px] lg:text-[16px] text-black">
                   Nome Completo
@@ -181,20 +214,52 @@ export default function Login() {
                 />
               </div>
 
-              <div className="space-y-2">
-                <label className="font-['Montserrat',sans-serif] font-medium text-[14px] lg:text-[16px] text-black">
-                  Função
-                </label>
-                <Select value={signupRole} onValueChange={setSignupRole}>
-                  <SelectTrigger className="h-12 text-base border-2 border-[#f0f2fb] rounded-xl focus:border-[#0c7c97] font-['Montserrat',sans-serif]">
-                    <SelectValue placeholder="Selecione sua função" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Cleaner">Cleaner</SelectItem>
-                    <SelectItem value="Supervisora">Supervisora</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {signupMode === 'create' ? (
+                <div className="space-y-2">
+                  <label className="font-['Montserrat',sans-serif] font-medium text-[14px] lg:text-[16px] text-black">
+                    Nome da Organização
+                  </label>
+                  <Input
+                    type="text"
+                    placeholder="Nome da sua empresa"
+                    value={orgName}
+                    onChange={(e) => setOrgName(e.target.value)}
+                    required
+                    className="h-12 text-base border-2 border-[#f0f2fb] rounded-xl focus:border-[#0c7c97] font-['Montserrat',sans-serif]"
+                  />
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <label className="font-['Montserrat',sans-serif] font-medium text-[14px] lg:text-[16px] text-black">
+                      Código de Convite
+                    </label>
+                    <Input
+                      type="text"
+                      placeholder="Ex: A1B2C3D4"
+                      value={inviteCode}
+                      onChange={(e) => setInviteCode(e.target.value)}
+                      required
+                      className="h-12 text-base border-2 border-[#f0f2fb] rounded-xl focus:border-[#0c7c97] font-['Montserrat',sans-serif] uppercase"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="font-['Montserrat',sans-serif] font-medium text-[14px] lg:text-[16px] text-black">
+                      Função
+                    </label>
+                    <Select value={signupRole} onValueChange={setSignupRole}>
+                      <SelectTrigger className="h-12 text-base border-2 border-[#f0f2fb] rounded-xl focus:border-[#0c7c97] font-['Montserrat',sans-serif]">
+                        <SelectValue placeholder="Selecione sua função" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Cleaner">Cleaner</SelectItem>
+                        <SelectItem value="Supervisora">Supervisora</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
 
               <button
                 type="submit"
@@ -209,7 +274,7 @@ export default function Login() {
         </div>
 
         <p className="text-center mt-6 font-['Montserrat',sans-serif] text-[14px] text-[#666]">
-          © 2026 Sistema de Estoque Manatee
+          © 2026 StockFlow
         </p>
       </div>
     </div>

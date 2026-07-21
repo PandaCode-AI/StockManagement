@@ -5,11 +5,11 @@ import Header from '../components/Header';
 import ConfirmacaoModal from '../components/ConfirmacaoModal';
 import { ArrowLeft, Minus, Plus, CheckCircle2, User, Settings, Clock, Calendar, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
-import { projectId, publicAnonKey } from '../../../utils/supabase/info';
+import { projectId } from '../../../utils/supabase/info';
 
 export default function EntregarMateriais() {
   const navigate = useNavigate();
-  const { items, batchStockOut, currentProfile, profiles } = useInventory();
+  const { items, batchStockOut, currentProfile, profiles, accessToken } = useInventory();
   const [selectedItems, setSelectedItems] = useState<{ [key: string]: number }>({});
   const [selectedCleaner, setSelectedCleaner] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -41,7 +41,7 @@ export default function EntregarMateriais() {
         `https://${projectId}.supabase.co/functions/v1/make-server-264019ad/profiles/${employeeId}/last-movements`,
         {
           headers: {
-            'Authorization': `Bearer ${publicAnonKey}`,
+            'Authorization': `Bearer ${accessToken}`,
           },
         }
       );

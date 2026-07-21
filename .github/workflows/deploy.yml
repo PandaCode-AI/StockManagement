@@ -23,6 +23,9 @@ jobs:
           node-version: 20
       - run: npm install
       - run: npm run build
+        env:
+          VITE_SUPABASE_PROJECT_ID: ${{ secrets.VITE_SUPABASE_PROJECT_ID }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
       # SPA fallback: GitHub Pages has no server-side rewrites, so a hard
       # refresh on a client-side route (e.g. /estoque) 404s. Serving the
       # built index.html for unknown paths lets React Router take over.

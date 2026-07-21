@@ -7,7 +7,7 @@ import { Pencil, Search, Package, Plus } from 'lucide-react';
 export default function Estoque() {
   const navigate = useNavigate();
   const { items, currentProfile } = useInventory();
-  const canAdd = currentProfile?.role === 'Admin' || currentProfile?.role === 'Super';
+  const canAdd = currentProfile?.role === 'Admin' || currentProfile?.role === 'Owner';
   const [searchTerm, setSearchTerm] = useState('');
 
   // Filter items based on search term

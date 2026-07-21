@@ -2,16 +2,25 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useInventory } from '../context/InventoryContext';
 import Header from '../components/Header';
-import { ArrowLeft, UserPlus, Trash2, Users } from 'lucide-react';
+import { ArrowLeft, UserPlus, Trash2, Users, Copy, Check } from 'lucide-react';
 import { toast } from 'sonner';
-import { projectId, publicAnonKey } from '../../../utils/supabase/info';
+import { projectId } from '../../../utils/supabase/info';
 
 export default function GerenciarUsuarios() {
   const navigate = useNavigate();
-  const { profiles, fetchProfiles } = useInventory();
+  const { profiles, fetchProfiles, currentOrg, accessToken } = useInventory();
   const [showAddForm, setShowAddForm] = useState(false);
   const [newUserName, setNewUserName] = useState('');
   const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyInviteCode = () => {
+    if (!currentOrg?.invite_code) return;
+    navigator.clipboard.writeText(currentOrg.invite_code);
+    setCopied(true);
+    toast.success('Código copiado!');
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   // Filter only Cleaner profiles
   const cleanerProfiles = profiles.filter(p => p.role === 'Cleaner');
@@ -33,7 +42,7 @@ export default function GerenciarUsuarios() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${publicAnonKey}`,
+            'Authorization': `Bearer ${accessToken}`,
           },
           body: JSON.stringify({
             full_name: newUserName.trim(),
@@ -92,7 +101,7 @@ export default function GerenciarUsuarios() {
         {
           method: 'DELETE',
           headers: {
-            'Authorization': `Bearer ${publicAnonKey}`,
+            'Authorization': `Bearer ${accessToken}`,
           },
         }
       );
@@ -137,6 +146,34 @@ export default function GerenciarUsuarios() {
           </p>
         </div>
       </div>
+
+      {/* Invite Code (Admin/Owner only — the backend omits it otherwise) */}
+      {currentOrg?.invite_code && (
+        <div className="relative shrink-0 w-full px-[24px] lg:px-[48px]">
+          <div className="bg-[#f0f2fb] rounded-[16px] lg:rounded-[20px] p-[20px] lg:p-[28px]">
+            <p className="font-['Montserrat',sans-serif] font-semibold text-[16px] lg:text-[18px] text-black mb-[8px]">
+              Código de convite da organização
+            </p>
+            <p className="font-['Montserrat',sans-serif] font-normal text-[13px] lg:text-[14px] text-gray-600 mb-[12px]">
+              Compartilhe este código para que novos funcionários entrem em {currentOrg.name}
+            </p>
+            <div className="flex items-center gap-[12px]">
+              <code className="bg-white px-[16px] py-[10px] rounded-[8px] border-2 border-[#0c7c97] font-mono font-bold text-[18px] lg:text-[20px] text-[#0c7c97] tracking-wider">
+                {currentOrg.invite_code}
+              </code>
+              <button
+                onClick={handleCopyInviteCode}
+                className="flex items-center gap-[6px] px-[16px] py-[10px] rounded-[8px] bg-white border-2 border-[#f0f2fb] hover:border-[#0c7c97] transition-colors"
+              >
+                {copied ? <Check className="size-[18px] text-green-600" /> : <Copy className="size-[18px] text-[#0c7c97]" />}
+                <span className="font-['Montserrat',sans-serif] font-medium text-[14px] text-[#323232]">
+                  {copied ? 'Copiado' : 'Copiar'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add User Button */}
       <div className="relative shrink-0 w-full px-[24px] lg:px-[48px]">

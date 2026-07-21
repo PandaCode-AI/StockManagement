@@ -8,7 +8,7 @@ import { toast } from 'sonner';
 export default function Header() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { currentUser, currentProfile, signOut } = useInventory();
+  const { currentUser, currentProfile, currentOrg, signOut } = useInventory();
 
   const isStockPage = location.pathname === '/' || location.pathname.startsWith('/editar');
   const isMovementsPage = location.pathname.includes('movimentacoes') ||
@@ -35,12 +35,19 @@ export default function Header() {
     <div className="relative shrink-0 w-full">
       {/* Logo + Perfil */}
       <div className="flex items-center justify-between px-[24px] lg:px-[48px] py-4 relative w-full">
-        <div className="h-[48px] lg:h-[56px] relative shrink-0 w-[150px] lg:w-[176px] cursor-pointer" onClick={() => navigate('/')}>
-          <img
-            alt="Manatee Logo"
-            className="absolute inset-0 max-w-none object-cover pointer-events-none size-full"
-            src={imgLogo}
-          />
+        <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/')}>
+          <div className="h-[48px] lg:h-[56px] relative shrink-0 w-[150px] lg:w-[176px]">
+            <img
+              alt="StockFlow Logo"
+              className="absolute inset-0 max-w-none object-cover pointer-events-none size-full"
+              src={imgLogo}
+            />
+          </div>
+          {currentOrg?.name && (
+            <p className="font-['Montserrat',sans-serif] font-medium text-[#666] text-sm lg:text-base hidden md:block border-l-2 border-[#f0f2fb] pl-3">
+              {currentOrg.name}
+            </p>
+          )}
         </div>
 
         <div className="flex items-center gap-2 lg:gap-3">
