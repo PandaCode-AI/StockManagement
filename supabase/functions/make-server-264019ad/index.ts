@@ -1077,7 +1077,18 @@ app.get("/make-server-264019ad/profiles", async (c) => {
     // Filter only active profiles (where is_active is true or null for backwards compatibility)
     const activeProfiles = (data || []).filter(p => p.is_active !== false);
 
-    return c.json({ profiles: activeProfiles });
+    // Only Supervisoras (and above) have a real login to activate — Cleaners
+    // never appear in this RPC's result since they have no auth_user_id.
+    // pending = invited but hasn't finished setting a password yet (a link
+    // click alone, e.g. from an email security scanner, doesn't count).
+    const { data: authStatus } = await supabaseAdmin.rpc('profile_auth_status', { org_id_param: org_id });
+    const hasPasswordByEmployeeId = new Map((authStatus || []).map((r: any) => [r.employee_id, r.has_password]));
+    const profilesWithStatus = activeProfiles.map(p => ({
+      ...p,
+      pending: hasPasswordByEmployeeId.has(p.employee_id) ? !hasPasswordByEmployeeId.get(p.employee_id) : undefined,
+    }));
+
+    return c.json({ profiles: profilesWithStatus });
   } catch (error) {
     console.error('❌ Exception fetching profiles:', error);
     return c.json({ error: 'Failed to fetch profiles' }, 500);

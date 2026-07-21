@@ -220,11 +220,24 @@ export default function GerenciarUsuarios() {
                       <ShieldCheck className="size-[20px] lg:size-[24px] text-white" />
                     </div>
                     <div>
-                      <p className="font-['Montserrat',sans-serif] font-semibold text-[18px] lg:text-[20px] text-black">
-                        {profile.full_name}
-                      </p>
+                      <div className="flex items-center gap-[8px] flex-wrap">
+                        <p className="font-['Montserrat',sans-serif] font-semibold text-[18px] lg:text-[20px] text-black">
+                          {profile.full_name}
+                        </p>
+                        {profile.pending === true && (
+                          <span className="bg-amber-100 text-amber-700 text-[11px] lg:text-[12px] font-['Montserrat',sans-serif] font-semibold px-[10px] py-[2px] rounded-full">
+                            Pendente
+                          </span>
+                        )}
+                        {profile.pending === false && (
+                          <span className="bg-green-100 text-green-700 text-[11px] lg:text-[12px] font-['Montserrat',sans-serif] font-semibold px-[10px] py-[2px] rounded-full">
+                            Ativo
+                          </span>
+                        )}
+                      </div>
                       <p className="font-['Montserrat',sans-serif] font-normal text-[14px] lg:text-[16px] text-gray-600">
                         {profile.role}
+                        {profile.pending === true && ' · aguardando ativação do convite'}
                       </p>
                     </div>
                   </div>

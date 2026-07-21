@@ -53,6 +53,10 @@ export interface Profile {
   full_name: string;
   role: string;
   created_at: string;
+  // Only meaningful for roles with a real login (e.g. Supervisora): true if
+  // invited but hasn't finished setting a password yet. Undefined for
+  // roles with no login concept (Cleaner).
+  pending?: boolean;
 }
 
 export interface Organization {
