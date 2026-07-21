@@ -119,7 +119,14 @@ export const router = createBrowserRouter([
           </AdminOnlyRoute>
         )
       },
-      { path: "gerenciar-usuarios", Component: GerenciarUsuarios },
+      {
+        path: "gerenciar-usuarios",
+        element: (
+          <AdminOnlyRoute>
+            <GerenciarUsuarios />
+          </AdminOnlyRoute>
+        )
+      },
       {
         path: "monitoramento",
         element: (
