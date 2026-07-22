@@ -1,6 +1,6 @@
 import { useNavigate, useLocation } from 'react-router';
 import { useInventory } from '../context/InventoryContext';
-import { Package, Repeat, Clock, BarChart3, Users } from 'lucide-react';
+import { Package, Repeat, Clock, BarChart3, Users, CreditCard } from 'lucide-react';
 
 export default function NavigationFooter() {
   const navigate = useNavigate();
@@ -21,12 +21,13 @@ export default function NavigationFooter() {
   const isHistoryPage = location.pathname.includes('historico');
   const isMonitoringPage = location.pathname.includes('monitoramento');
   const isUsersPage = location.pathname.includes('gerenciar-usuarios');
+  const isBillingPage = location.pathname.includes('assinatura');
 
   const isAdmin = currentProfile?.role === 'Admin' || currentProfile?.role === 'Owner';
   const isOwner = currentProfile?.role === 'Owner';
 
-  // Grid columns: 2 for regular users, 4 for Admin, 5 for Owner
-  const gridCols = isOwner ? 'grid-cols-5' : isAdmin ? 'grid-cols-4' : 'grid-cols-2';
+  // Grid columns: 2 for regular users, 4 for Admin, 6 for Owner
+  const gridCols = isOwner ? 'grid-cols-6' : isAdmin ? 'grid-cols-4' : 'grid-cols-2';
 
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-[#f0f2fb] z-50">
@@ -103,6 +104,22 @@ export default function NavigationFooter() {
               isMonitoringPage ? 'font-bold' : 'font-medium'
             }`}>
               Monitoramento
+            </span>
+          </button>
+        )}
+
+        {isOwner && (
+          <button
+            onClick={() => navigate('/assinatura')}
+            className={`flex flex-col items-center justify-center py-3 px-2 transition-all ${
+              isBillingPage ? 'bg-[#0c7c97] text-white' : 'bg-white text-[#323232] hover:bg-[#f0f2fb]'
+            }`}
+          >
+            <CreditCard className={`h-6 w-6 mb-1 ${isBillingPage ? 'stroke-white' : 'stroke-[#323232]'}`} strokeWidth={2} />
+            <span className={`font-['Montserrat',sans-serif] text-[11px] lg:text-[13px] ${
+              isBillingPage ? 'font-bold' : 'font-medium'
+            }`}>
+              Assinatura
             </span>
           </button>
         )}

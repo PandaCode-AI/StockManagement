@@ -1,0 +1,12 @@
+project_id = "flurgpsyfobrxdpiixwp"
+
+# Our own Hono app in index.ts already authenticates every non-public route
+# itself (verifies the caller's Supabase session token, resolves org/role)
+# and PUBLIC_PATHS/rateLimit() cover the handful of routes that don't need
+# a caller identity yet. The one route this setting is actually for is
+# /billing/webhook: Stripe calls it directly and only sends a
+# `stripe-signature` header, never a Supabase JWT -- with the platform's
+# default JWT gate on, Supabase would reject the request with 401 before
+# our own signature verification ever runs.
+[functions.make-server-264019ad]
+verify_jwt = false

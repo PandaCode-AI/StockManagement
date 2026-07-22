@@ -2,6 +2,7 @@ import { Hono } from "npm:hono";
 import { cors } from "npm:hono/cors";
 import { logger } from "npm:hono/logger";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import Stripe from "npm:stripe@17.5.0";
 
 type AuthedProfile = {
   employee_id: number;
@@ -24,6 +25,18 @@ const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
 
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+
+// Stripe billing (all optional at import time so the rest of the API keeps
+// working before these secrets are configured — routes below return a clear
+// 500 instead of crashing the whole function on boot).
+const stripeSecretKey = Deno.env.get('STRIPE_SECRET_KEY');
+const stripePriceId = Deno.env.get('STRIPE_PRICE_ID');
+const stripeWebhookSecret = Deno.env.get('STRIPE_WEBHOOK_SECRET');
+const stripe = stripeSecretKey
+  ? new Stripe(stripeSecretKey, { httpClient: Stripe.createFetchHttpClient() })
+  : null;
+
+const TRIAL_DAYS = 14;
 
 // Custom logger function that won't interfere with responses
 const customLogger = (message: string, ...args: any[]) => {
@@ -64,9 +77,9 @@ function generateInviteCode(): string {
 // Paths that don't require an authenticated + org-linked caller.
 const PUBLIC_PATHS = new Set([
   '/make-server-264019ad/health',
-  '/make-server-264019ad/jobs.xml',
   '/make-server-264019ad/auth/signup-org',
   '/make-server-264019ad/auth/signup-join',
+  '/make-server-264019ad/billing/webhook',
 ]);
 
 // Verifies the caller's real session (not the shared anon key) and resolves
@@ -105,6 +118,42 @@ app.use('*', async (c, next) => {
   await next();
 });
 
+// ==================== RATE LIMITING ====================
+
+// Lightweight in-memory limiter for the unauthenticated signup endpoints --
+// anyone can hit these with no caller identity yet, so scripted org/account
+// spam or invite-code brute-forcing is otherwise unbounded. Keyed by IP,
+// not distributed (resets on cold start), but stops casual scripted abuse
+// without needing a persistent store for what's a secondary defense (the
+// primary one being that invite codes are high-entropy and Supabase Auth
+// itself rejects duplicate emails).
+const rateLimitBuckets = new Map<string, number[]>();
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+const RATE_LIMIT_MAX_REQUESTS = 5;
+
+function getClientIp(c: any): string {
+  const forwarded = c.req.header('x-forwarded-for');
+  if (forwarded) return forwarded.split(',')[0].trim();
+  return c.req.header('cf-connecting-ip') || c.req.header('x-real-ip') || 'unknown';
+}
+
+function rateLimit() {
+  return async (c: any, next: any) => {
+    const key = `${c.req.path}:${getClientIp(c)}`;
+    const now = Date.now();
+    const recent = (rateLimitBuckets.get(key) || []).filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+
+    if (recent.length >= RATE_LIMIT_MAX_REQUESTS) {
+      rateLimitBuckets.set(key, recent);
+      return c.json({ error: 'Muitas tentativas. Tente novamente em alguns minutos.' }, 429);
+    }
+
+    recent.push(now);
+    rateLimitBuckets.set(key, recent);
+    await next();
+  };
+}
+
 function requireRole(...roles: string[]) {
   return async (c: any, next: any) => {
     const profile = c.get('profile') as AuthedProfile;
@@ -115,40 +164,52 @@ function requireRole(...roles: string[]) {
   };
 }
 
+// Routes an org must be able to reach even while its subscription is
+// inactive — /me so the frontend can read status at all, and the billing
+// routes so an Owner can actually pay to unblock the rest of the app.
+const BILLING_EXEMPT_PATHS = new Set([
+  '/make-server-264019ad/me',
+  '/make-server-264019ad/billing/checkout',
+  '/make-server-264019ad/billing/portal',
+]);
+
+function isSubscriptionActive(status: string | null | undefined, trialEndsAt: string | null | undefined): boolean {
+  if (status === 'active') return true;
+  if (status === 'trialing' && trialEndsAt && new Date(trialEndsAt).getTime() > Date.now()) return true;
+  return false;
+}
+
+// Blocks all app data routes once a trial has expired and no paid
+// subscription is active. Runs after the auth middleware above, so
+// c.get('profile') is always set here.
+app.use('*', async (c, next) => {
+  if (c.req.method === 'OPTIONS' || PUBLIC_PATHS.has(c.req.path) || BILLING_EXEMPT_PATHS.has(c.req.path)) {
+    return next();
+  }
+
+  const { org_id } = c.get('profile');
+  const { data: org } = await supabaseAdmin
+    .from('organizations')
+    .select('subscription_status, trial_ends_at')
+    .eq('org_id', org_id)
+    .single();
+
+  if (!isSubscriptionActive(org?.subscription_status, org?.trial_ends_at)) {
+    return c.json({ error: 'Assinatura inativa ou período de teste expirado', code: 'SUBSCRIPTION_INACTIVE' }, 402);
+  }
+
+  await next();
+});
+
 // Health check endpoint
 app.get("/make-server-264019ad/health", (c) => {
   return c.json({ status: "ok" });
 });
 
-// Jobs XML feed endpoint
-app.get("/make-server-264019ad/jobs.xml", (c) => {
-  const xmlContent = `<?xml version="1.0" encoding="UTF-8"?>
-<source>
-  <publisher>Your HR Software Name</publisher>
-  <publisherurl>https://yourapp.com</publisherurl>
-  <job>
-    <title><![CDATA[Software Engineer]]></title>
-    <date><![CDATA[Tue, 19 May 2026 00:00:00 GMT]]></date>
-    <referencenumber><![CDATA[JOB-001]]></referencenumber>
-    <url><![CDATA[https://yourapp.com/jobs/001]]></url>
-    <company><![CDATA[Acme Corp]]></company>
-    <city><![CDATA[Belo Horizonte]]></city>
-    <state><![CDATA[MG]]></state>
-    <country><![CDATA[BR]]></country>
-    <description><![CDATA[Full job description here...]]></description>
-    <salary><![CDATA[R$8.000 - R$12.000/month]]></salary>
-  </job>
-</source>`;
-
-  return c.body(xmlContent, 200, {
-    'Content-Type': 'application/xml; charset=utf-8',
-  });
-});
-
 // ==================== AUTH ROUTES ====================
 
 // Sign up and create a brand-new organization (caller becomes its Owner)
-app.post("/make-server-264019ad/auth/signup-org", async (c) => {
+app.post("/make-server-264019ad/auth/signup-org", rateLimit(), async (c) => {
   let createdUserId: string | undefined;
   let createdOrgId: string | undefined;
   try {
@@ -176,9 +237,16 @@ app.post("/make-server-264019ad/auth/signup-org", async (c) => {
     }
     createdUserId = authData.user.id;
 
+    const trialEndsAt = new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const { data: org, error: orgError } = await supabaseAdmin
       .from('organizations')
-      .insert({ name: orgName.trim(), slug: slugify(orgName), invite_code: generateInviteCode() })
+      .insert({
+        name: orgName.trim(),
+        slug: slugify(orgName),
+        invite_code: generateInviteCode(),
+        subscription_status: 'trialing',
+        trial_ends_at: trialEndsAt,
+      })
       .select()
       .single();
 
@@ -216,13 +284,18 @@ app.post("/make-server-264019ad/auth/signup-org", async (c) => {
     console.error('❌ Signup-org exception:', error);
     // Best-effort cleanup so a failed signup never leaves an orphaned auth user/org behind
     if (createdUserId) await supabaseAdmin.auth.admin.deleteUser(createdUserId).catch(() => {});
-    if (createdOrgId) await supabaseAdmin.from('organizations').delete().eq('org_id', createdOrgId).catch(() => {});
+    // Not a real Promise (just thenable), so .catch() isn't valid on it -- try/catch instead.
+    if (createdOrgId) {
+      try {
+        await supabaseAdmin.from('organizations').delete().eq('org_id', createdOrgId);
+      } catch { /* best-effort cleanup */ }
+    }
     return c.json({ error: 'Failed to create organization' }, 500);
   }
 });
 
 // Sign up and join an existing organization via its invite code
-app.post("/make-server-264019ad/auth/signup-join", async (c) => {
+app.post("/make-server-264019ad/auth/signup-join", rateLimit(), async (c) => {
   let createdUserId: string | undefined;
   try {
     const { email, password, name, inviteCode, role } = await c.req.json();
@@ -295,9 +368,12 @@ app.get("/make-server-264019ad/me", async (c) => {
     const profile = c.get('profile');
     const canSeeInviteCode = profile.role === 'Admin' || profile.role === 'Owner';
 
+    const billingFields = 'subscription_status, trial_ends_at, current_period_end, cancel_at_period_end';
     const { data: org, error } = await supabaseAdmin
       .from('organizations')
-      .select(canSeeInviteCode ? 'org_id, name, slug, invite_code' : 'org_id, name, slug')
+      .select(canSeeInviteCode
+        ? `org_id, name, slug, invite_code, ${billingFields}`
+        : `org_id, name, slug, ${billingFields}`)
       .eq('org_id', profile.org_id)
       .single();
 
@@ -1280,6 +1356,236 @@ app.post("/make-server-264019ad/invites", requireRole('Admin', 'Owner'), async (
     console.error('❌ Exception inviting supervisor:', error);
     if (createdUserId) await supabaseAdmin.auth.admin.deleteUser(createdUserId).catch(() => {});
     return c.json({ error: 'Failed to invite supervisor' }, 500);
+  }
+});
+
+// ==================== BILLING ROUTES ====================
+
+// Looks up which org a Stripe subscription belongs to. Metadata is set at
+// checkout time (see /billing/checkout below) and carried onto the
+// subscription Stripe creates from it, so this is the fast path; the
+// customer-id lookup is a fallback for edge cases (e.g. a subscription
+// created directly in the Stripe dashboard against an existing customer).
+async function resolveOrgIdFromSubscription(subscription: Stripe.Subscription): Promise<string | null> {
+  const metaOrgId = subscription.metadata?.org_id;
+  if (metaOrgId) return metaOrgId;
+
+  const { data } = await supabaseAdmin
+    .from('organizations')
+    .select('org_id')
+    .eq('stripe_customer_id', subscription.customer as string)
+    .single();
+  return data?.org_id ?? null;
+}
+
+// Starts (or resumes) the org's paid subscription via Stripe Checkout.
+// Owner-only: this is the one action that commits the org to a real charge.
+app.post("/make-server-264019ad/billing/checkout", requireRole('Owner'), async (c) => {
+  try {
+    if (!stripe || !stripePriceId) {
+      return c.json({ error: 'Cobrança não configurada no servidor' }, 500);
+    }
+
+    const { org_id } = c.get('profile');
+    const { successUrl, cancelUrl } = await c.req.json();
+    if (!successUrl || !cancelUrl) {
+      return c.json({ error: 'successUrl e cancelUrl são obrigatórios' }, 400);
+    }
+
+    const { data: org, error: orgError } = await supabaseAdmin
+      .from('organizations')
+      .select('org_id, name, stripe_customer_id')
+      .eq('org_id', org_id)
+      .single();
+
+    if (orgError || !org) {
+      return c.json({ error: 'Organização não encontrada' }, 404);
+    }
+
+    let customerId = org.stripe_customer_id as string | null;
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        name: org.name,
+        metadata: { org_id },
+      });
+      customerId = customer.id;
+      await supabaseAdmin.from('organizations').update({ stripe_customer_id: customerId }).eq('org_id', org_id);
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      customer: customerId,
+      line_items: [{ price: stripePriceId, quantity: 1 }],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      client_reference_id: org_id,
+      subscription_data: { metadata: { org_id } },
+    });
+
+    return c.json({ url: session.url });
+  } catch (error) {
+    console.error('❌ Exception creating checkout session:', error);
+    return c.json({ error: 'Falha ao iniciar checkout' }, 500);
+  }
+});
+
+// Opens the Stripe-hosted billing portal so an Owner can update the payment
+// method, view invoices, or cancel — without us building any of that UI.
+app.post("/make-server-264019ad/billing/portal", requireRole('Owner'), async (c) => {
+  try {
+    if (!stripe) {
+      return c.json({ error: 'Cobrança não configurada no servidor' }, 500);
+    }
+
+    const { org_id } = c.get('profile');
+    const { returnUrl } = await c.req.json();
+    if (!returnUrl) {
+      return c.json({ error: 'returnUrl é obrigatório' }, 400);
+    }
+
+    const { data: org } = await supabaseAdmin
+      .from('organizations')
+      .select('stripe_customer_id')
+      .eq('org_id', org_id)
+      .single();
+
+    if (!org?.stripe_customer_id) {
+      return c.json({ error: 'Nenhuma assinatura encontrada para esta organização' }, 400);
+    }
+
+    const session = await stripe.billingPortal.sessions.create({
+      customer: org.stripe_customer_id,
+      return_url: returnUrl,
+    });
+
+    return c.json({ url: session.url });
+  } catch (error) {
+    console.error('❌ Exception creating billing portal session:', error);
+    return c.json({ error: 'Falha ao abrir portal de cobrança' }, 500);
+  }
+});
+
+// Stripe webhook — the source of truth for subscription state. Public path
+// (see PUBLIC_PATHS) since Stripe calls this directly, authenticated only by
+// the signature below, never by our normal Bearer-token auth.
+app.post("/make-server-264019ad/billing/webhook", async (c) => {
+  if (!stripe || !stripeWebhookSecret) {
+    return c.json({ error: 'Webhook não configurado' }, 500);
+  }
+
+  const signature = c.req.header('stripe-signature');
+  if (!signature) {
+    return c.json({ error: 'Missing stripe-signature header' }, 400);
+  }
+
+  const body = await c.req.text();
+  let event: Stripe.Event;
+  try {
+    event = await stripe.webhooks.constructEventAsync(
+      body,
+      signature,
+      stripeWebhookSecret,
+      undefined,
+      Stripe.createSubtleCryptoProvider(),
+    );
+  } catch (err) {
+    console.error('❌ Webhook signature verification failed:', err);
+    return c.json({ error: 'Invalid signature' }, 400);
+  }
+
+  // Supabase's query builder resolves with { data, error } instead of
+  // rejecting on failure (confirmed locally: even a call against an
+  // unreachable host resolves rather than throws), so every update below
+  // must check `error` explicitly -- an unchecked await here would log
+  // success and return 200 even when the write never happened, and Stripe
+  // never retries a webhook it was told succeeded.
+  try {
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const orgId = session.client_reference_id;
+        if (orgId && session.subscription) {
+          const { error } = await supabaseAdmin
+            .from('organizations')
+            .update({
+              stripe_subscription_id: session.subscription as string,
+              subscription_status: 'active',
+              cancel_at_period_end: false,
+            })
+            .eq('org_id', orgId);
+          if (error) throw new Error(`Failed to update org ${orgId} after checkout: ${error.message}`);
+          console.log('✅ Checkout completed for org:', orgId);
+        }
+        break;
+      }
+
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated': {
+        const subscription = event.data.object as Stripe.Subscription;
+        const orgId = await resolveOrgIdFromSubscription(subscription);
+        if (orgId) {
+          // API versions from 2025-03-31 onward moved current_period_end off
+          // the subscription itself onto each subscription item (to support
+          // multiple items with different billing cycles) -- confirmed live:
+          // the top-level field came back undefined against this account's
+          // default API version, silently producing an Invalid Date. Read
+          // whichever shape is actually present, and skip the column update
+          // rather than write a bad value if neither is.
+          const rawPeriodEnd = (subscription as any).current_period_end
+            ?? (subscription.items?.data?.[0] as any)?.current_period_end;
+          const currentPeriodEnd = rawPeriodEnd ? new Date(rawPeriodEnd * 1000).toISOString() : null;
+
+          const { error } = await supabaseAdmin
+            .from('organizations')
+            .update({
+              stripe_subscription_id: subscription.id,
+              subscription_status: subscription.status,
+              cancel_at_period_end: subscription.cancel_at_period_end,
+              ...(currentPeriodEnd ? { current_period_end: currentPeriodEnd } : {}),
+            })
+            .eq('org_id', orgId);
+          if (error) throw new Error(`Failed to update org ${orgId} subscription status: ${error.message}`);
+          console.log(`✅ Subscription ${subscription.status} for org:`, orgId, subscription.cancel_at_period_end ? '(canceling at period end)' : '');
+        }
+        break;
+      }
+
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object as Stripe.Subscription;
+        const orgId = await resolveOrgIdFromSubscription(subscription);
+        if (orgId) {
+          const { error } = await supabaseAdmin
+            .from('organizations')
+            .update({ subscription_status: 'canceled', cancel_at_period_end: false })
+            .eq('org_id', orgId);
+          if (error) throw new Error(`Failed to mark org ${orgId} canceled: ${error.message}`);
+          console.log('✅ Subscription canceled for org:', orgId);
+        }
+        break;
+      }
+
+      case 'invoice.payment_failed': {
+        const invoice = event.data.object as Stripe.Invoice;
+        const subscriptionId = invoice.subscription as string | null;
+        if (subscriptionId) {
+          const { error } = await supabaseAdmin
+            .from('organizations')
+            .update({ subscription_status: 'past_due' })
+            .eq('stripe_subscription_id', subscriptionId);
+          if (error) throw new Error(`Failed to mark subscription ${subscriptionId} past_due: ${error.message}`);
+          console.log('⚠️ Payment failed for subscription:', subscriptionId);
+        }
+        break;
+      }
+
+      default:
+        break;
+    }
+
+    return c.json({ received: true });
+  } catch (error) {
+    console.error('❌ Exception handling webhook event:', error);
+    return c.json({ error: 'Webhook handler failed' }, 500);
   }
 });
 

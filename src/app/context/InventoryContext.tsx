@@ -64,6 +64,10 @@ export interface Organization {
   name: string;
   slug?: string;
   invite_code?: string;
+  subscription_status: 'trialing' | 'active' | 'past_due' | 'canceled' | 'incomplete' | 'unpaid' | string;
+  trial_ends_at?: string | null;
+  current_period_end?: string | null;
+  cancel_at_period_end?: boolean;
 }
 
 export interface NewItemData {
@@ -93,6 +97,8 @@ interface InventoryContextType {
   signUpCreateOrg: (email: string, password: string, name: string, orgName: string) => Promise<void>;
   signUpJoinOrg: (email: string, password: string, name: string, inviteCode: string, role: string) => Promise<void>;
   inviteSupervisor: (name: string, email: string) => Promise<void>;
+  startCheckout: () => Promise<void>;
+  openBillingPortal: () => Promise<void>;
   signOut: () => Promise<void>;
   fetchItems: () => Promise<void>;
   fetchTransactions: (itemId?: string) => Promise<void>;
@@ -273,6 +279,65 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
       await fetchProfiles();
     } catch (error) {
       console.error('❌ Error inviting supervisor:', error);
+      throw error;
+    }
+  };
+
+  const startCheckout = async () => {
+    try {
+      const base = `${window.location.origin}${import.meta.env.BASE_URL}`;
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-264019ad/billing/checkout`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessTokenRef.current}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            successUrl: `${base}assinatura?checkout=success`,
+            cancelUrl: `${base}assinatura?checkout=cancelled`,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Falha ao iniciar checkout');
+      }
+
+      window.location.href = data.url;
+    } catch (error) {
+      console.error('❌ Error starting checkout:', error);
+      throw error;
+    }
+  };
+
+  const openBillingPortal = async () => {
+    try {
+      const base = `${window.location.origin}${import.meta.env.BASE_URL}`;
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-264019ad/billing/portal`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessTokenRef.current}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ returnUrl: `${base}assinatura` }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Falha ao abrir portal de cobrança');
+      }
+
+      window.location.href = data.url;
+    } catch (error) {
+      console.error('❌ Error opening billing portal:', error);
       throw error;
     }
   };
@@ -755,6 +820,8 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
         signUpCreateOrg,
         signUpJoinOrg,
         inviteSupervisor,
+        startCheckout,
+        openBillingPortal,
         signOut,
         fetchItems,
         fetchTransactions,
